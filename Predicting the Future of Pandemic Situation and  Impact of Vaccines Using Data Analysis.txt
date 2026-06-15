@@ -1,0 +1,424 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import linregress
+from scipy.optimize import curve_fit
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+from sklearn.linear_model import Ridge
+import plotly.express as px
+import warnings
+warnings.filterwarnings('ignore')
+
+# Load dataset
+data = pd.read_csv('/content/country_wise_latest.csv')
+df = pd.DataFrame(data)
+print(df.head())
+df['Days'] = np.arange(1, len(df) + 1)
+df['Cases'] = df['New cases']
+df['vaccinated_percentage'] = df['New recovered']
+
+# Step 1: Visualize historical data
+plt.figure(figsize=(10, 5))
+sns.lineplot(x='Days', y='Cases', data=df, marker='o')
+plt.title('Historical Spread of Virus')
+plt.xlabel('Days')
+plt.ylabel('Number of Cases')
+plt.grid()
+plt.show()
+
+# Step 2: Prepare the data for modeling
+X = df['Days']  
+y = df['Cases'] 
+
+# Step 3: Perform linear regression using SciPy
+slope, intercept, _, _, _ = linregress(X, y)
+
+# Step 4: Create a function for predictions
+def predict(days):
+    return slope * days + intercept
+
+# Step 5: Make predictions for the next 10 days
+future_days = np.arange(0, 230)
+predicted_cases = predict(future_days)
+
+# Step 6: Visualize the predictions
+plt.figure(figsize=(10, 5))
+sns.lineplot(x='Days', y='Cases', data=df, marker='o', label='Historical Cases')
+sns.lineplot(x=future_days, y=predicted_cases, marker='x', linestyle='solid', color='red', label='Predicted Cases')
+plt.title('Virus Spread Prediction')
+plt.xlabel('Days')
+plt.ylabel('Number of Cases')
+plt.legend()
+plt.grid()
+plt.show()
+
+# Logistic Growth Model for Virus Spread (Without Vaccine)
+def logistic_growth(t, a, b, c):
+    """ Logistic growth function to model virus spread """
+    return a / (1 + np.exp(-b * (t - c)))
+
+# Fit the logistic growth model to the data
+params, _ = curve_fit(logistic_growth, df['Days'], df['Cases'], p0=[max(df['Cases']) * 1.2, 0.5, 2])
+
+# Logistic Growth Model with Vaccine Impact
+def logistic_with_vaccine(t, a, b, c, vaccine_effect):
+    """ Logistic growth with vaccination impact """
+    # Ensure index does not exceed the bounds of vaccinated_percentage
+    index = np.minimum(t.astype(int) -1 , len(df['vaccinated_percentage']) - 1) #Subtract 1 to adjust the index
+    reduced_b = b * (1 - vaccine_effect * df['vaccinated_percentage'].iloc[index])  # Reduce growth rate due to vaccination
+    return a / (1 + np.exp(-reduced_b * (t - c)))
+
+# Fit the logistic model with vaccination impact
+params_vaccine, _ = curve_fit(logistic_with_vaccine, df['Days'], df['Cases'], p0=[max(df['Cases'])*1.2, 0.5, 2, 0.1], maxfev=10000)
+
+
+# Predict future virus spread with vaccine impact
+future_infected_with_vaccine = logistic_with_vaccine(future_days, *params_vaccine)
+
+# Step 7: Linear Regression Model for Comparison
+regressor = LinearRegression()
+X_2d = X.values.reshape(-1, 1)  # Reshape X to have one column 
+regressor.fit(X_2d, y)
+
+predicted_cases_regression = regressor.predict(future_days.reshape(-1, 1))
+
+# Plot results: Actual vs Predicted with Vaccine Effect
+plt.figure(figsize=(10, 6))
+plt.plot(df['Days'], df['Cases'], label="Actual Cases", color='blue')
+plt.plot(future_days, future_infected_with_vaccine, label="Predicted with Vaccine", color='green', linestyle='--')
+plt.plot(future_days, predicted_cases_regression, label="Predicted by Linear Regression", color='red', linestyle='--')
+plt.title("Virus Spread Prediction with and without Vaccine")
+plt.xlabel("Days")
+plt.ylabel("Number of Infected Cases")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Function for Moving Average (MA)
+def moving_average(data, window_size):
+    return data.rolling(window=window_size, min_periods=1).mean()
+
+# Function for Exponentially Weighted Moving Average (EMA)
+def exponentially_weighted_moving_average(data, span):
+    return data.ewm(span=span, adjust=False).mean()
+
+# Create DataFrame for trend analysis
+window_size = 7  # 7-day moving average
+span = 7  # 7-day exponential moving average
+df['MA'] = moving_average(df['Cases'], window_size)
+df['EMA'] = exponentially_weighted_moving_average(df['Cases'], span)
+
+# Plot Moving Average and EMA
+plt.figure(figsize=(10, 6))
+plt.plot(df['Days'], df['Cases'], label="Actual Cases", color='blue')
+plt.plot(df['Days'], df['MA'], label="7-Day Moving Average", color='red', linestyle='--')
+plt.plot(df['Days'], df['EMA'], label="7-Day Exponential Moving Average", color='green', linestyle='--')
+plt.title("Virus Spread: Actual vs. Smoothed Data")
+plt.xlabel("Days")
+plt.ylabel("Number of Infected Cases")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Fit logistic growth model to the data
+def fit_logistic_growth(df):
+    popt, _ = curve_fit(logistic_growth, df['Days'], df['Cases'], p0=[10, 0.1, 5000])
+    return popt
+
+P0, r, K = fit_logistic_growth(df)
+
+# Predict future cases using the logistic growth model
+df['predicted_cases'] = logistic_growth(df['Days'], P0, r, K)
+
+# Plot actual vs predicted virus spread
+plt.figure(figsize=(10, 6))
+plt.plot(df['Days'], df['Cases'], label="Actual Cases", color='blue')
+plt.plot(df['Days'], df['predicted_cases'], label="Predicted Cases (Logistic Growth)", color='red', linestyle='--')
+plt.title("Actual vs Predicted Virus Spread")
+plt.xlabel("Days")
+plt.ylabel("Number of Infected Cases")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Simulate the impact of vaccination on the virus spread
+def vaccination_impact(t, vaccine_rate, vaccine_effectiveness, P_infected):
+    reduction_rate = vaccine_rate * vaccine_effectiveness
+    return P_infected - reduction_rate * t
+
+# Assume vaccine is 95% effective and 50 people are vaccinated per day
+vaccine_effectiveness = 0.95
+vaccination_rate = 50
+
+# Simulate the impact of vaccination on virus spread
+vaccinated_population = vaccination_impact(df['Days'], vaccination_rate, vaccine_effectiveness, df['Cases'])
+
+# Plot the vaccination impact on virus spread
+plt.figure(figsize=(10, 6))
+plt.plot(df['Days'], df['Cases'], label="Virus Spread without Vaccine", color='blue')
+plt.plot(df['Days'], vaccinated_population, label="Virus Spread with Vaccine", color='green')
+plt.title("Impact of Vaccination on Virus Spread")
+plt.xlabel("Days")
+plt.ylabel("Number of Infected Cases")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Linear regression to predict future cases
+X = df['Days'].values.reshape(-1, 1)
+y = df['Cases'].values
+
+# Fit the linear regression model
+linear_model = LinearRegression()
+linear_model.fit(X, y)
+
+# Predict future infections for days 120, 130, 140
+future_days = np.array([220, 230, 240]).reshape(-1, 1)
+future_predictions = linear_model.predict(future_days)
+
+print(f"Future Predictions for Days 220, 230, 240: {future_predictions}")
+
+# Plot the linear regression prediction
+plt.figure(figsize=(10, 6))
+plt.scatter(df['Days'], df['Cases'], color='blue', label="Actual Data")
+plt.plot(df['Days'], linear_model.predict(X), color='red', label="Linear Regression Prediction")
+plt.title("Linear Regression for Virus Spread Prediction")
+plt.xlabel("Days")
+plt.ylabel("Number of Infected Cases")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+np.random.seed(42)  # For reproducibility
+
+# Vaccine effectiveness values ranging from 10% to 100%
+vaccine_effectiveness = np.linspace(10, 100, 10)  
+
+virus_spread_rate = np.random.normal(100, 5, 10) - ((1 + (vaccination_rate/100)) * vaccine_effectiveness)  # Negative correlation adjusted for 50% vaccination rate
+
+# Create a DataFrame
+df = pd.DataFrame({
+    "vaccine_effectiveness": vaccine_effectiveness,
+    "virus_spread_rate": virus_spread_rate
+})
+
+# Step 2: Display the comparison table
+print("\nComparison Table of Vaccine Effectiveness and Virus Spread Rate (50% Vaccination Rate):")
+print(df)
+
+
+vaccine_effectiveness = np.linspace(10, 100, 10)  # 10%, 20%, ..., 100%
+num_samples = 10  # Number of baseline virus spread samples
+baseline_mean = 100
+baseline_std = 5
+
+# Generate the virus spread rate values
+virus_spread_rates = np.zeros((len(vaccine_effectiveness), num_samples))
+
+for i, eff in enumerate(vaccine_effectiveness):
+    # Generate random virus spread rate baseline (normal distribution)
+    baseline_spread = np.random.normal(baseline_mean, baseline_std, num_samples)
+    
+    # Adjust the spread rate based on vaccine effectiveness
+    adjustment = (1 + (vaccination_rate/100)) * eff  # Effect of vaccine
+    virus_spread_rates[i, :] = baseline_spread - adjustment  # Subtract the adjustment
+
+# Create a heatmap
+plt.figure(figsize=(10, 6))
+sns.heatmap(virus_spread_rates, annot=True, cmap="RdBu_r", xticklabels=[f"Sample {i+1}" for i in range(num_samples)],
+            yticklabels=[f"{int(eff)}%" for eff in vaccine_effectiveness], cbar_kws={'label': 'Virus Spread Rate'})
+
+# Labels and title
+plt.title('Heatmap of Virus Spread Rate vs Vaccine Effectiveness', fontsize=14)
+plt.xlabel('Sample', fontsize=12)
+plt.ylabel('Vaccine Effectiveness (%)', fontsize=12)
+
+# Display the heatmap
+plt.show()
+
+# Load the original dataset (assuming it's the same as before) 
+df_original = pd.DataFrame(data)  # Create a new DataFrame to avoid overwriting
+df_original['Days'] = np.arange(1, len(df_original) + 1)
+df_original['Cases'] = df_original['New cases']
+df_original['vaccinated_percentage'] = df_original['New recovered']
+
+
+# Split the data chronologically into training and test sets
+def time_based_split(df, train_size=0.8):
+    """ Split the data into training and testing based on time """
+    train_size = int(len(df) * train_size)
+    train_data = df[:train_size]
+    test_data = df[train_size:]
+    return train_data, test_data
+
+# Implement time-based validation
+def time_based_cross_validation(df, n_splits=5):
+    """
+    Perform time-based cross-validation
+    Args:
+    - df: DataFrame containing time-series data
+    - n_splits: Number of splits to create for cross-validation
+    """
+    errors = []
+    
+    # Perform cross-validation
+    for i in range(1, n_splits + 1):
+        print(f"Training model on split {i}/{n_splits}")
+        
+        # Determine the training and test data
+        train_size = int(len(df) * (i / n_splits))
+        train_data = df[:train_size]
+        test_data = df[train_size:]
+        
+        # Check if test_data is empty
+        if len(test_data) == 0:
+            print(f"Skipping split {i} as test data is empty.")
+            continue  # Skip this iteration if test_data is empty
+
+        # Prepare training and test sets
+        X_train = train_data['Days'].values.reshape(-1, 1)
+        y_train = train_data['Cases'].values
+        X_test = test_data['Days'].values.reshape(-1, 1)
+        y_test = test_data['Cases'].values
+
+        # Train the model
+        model = LinearRegression()
+        model.fit(X_train, y_train)
+
+        # Make predictions and calculate error
+        predictions = model.predict(X_test)
+        mse = mean_squared_error(y_test, predictions)
+        errors.append(mse)
+        print(f"Mean Squared Error for split {i}: {mse}")
+    
+    print(f"Average Mean Squared Error across {n_splits} splits: {np.mean(errors)}")
+
+# Example usage: Pass the original DataFrame 
+time_based_cross_validation(df_original)  # Use df_original here
+
+# Get the training and test data (using your time_based_split function)
+train_data, test_data = time_based_split(df_original) # Assuming you have df_original from previous code
+
+# Prepare the training data
+X_train = train_data['Days'].values.reshape(-1, 1)
+y_train = train_data['Cases'].values
+
+# Prepare the test data (for evaluation)
+X_test = test_data['Days'].values.reshape(-1, 1)
+y_test = test_data['Cases'].values
+
+# Apply Ridge Regression
+model_ridge = Ridge(alpha=0.6)  # alpha controls regularization strength
+model_ridge.fit(X_train, y_train)
+predictions_ridge = model_ridge.predict(X_test)
+mse_ridge = mean_squared_error(y_test, predictions_ridge)
+print(f"Mean Squared Error (Ridge Regression): {mse_ridge}")
+
+# Logistic growth function (without and with vaccine impact)
+def logistic_growth(t, a, b, c):
+    """ Logistic growth function """
+    return a / (1 + np.exp(-b * (t - c)))
+
+def vaccine_effectiveness(t, E0, decay_rate, booster_time=0, booster_effect=0):
+    """
+    Model vaccine effectiveness with waning immunity and booster doses
+    :param t: Time (days)
+    :param E0: Initial vaccine effectiveness (0-1)
+    :param decay_rate: Rate at which vaccine efficacy decays (per day)
+    :param booster_time: Time after which the booster is administered
+    :param booster_effect: Additional vaccine effectiveness due to booster
+    :return: Effective vaccine protection at time t
+    """
+    # Waning immunity model
+    effectiveness = E0 * np.exp(-decay_rate * t)
+    
+    # Booster dose impact: if time exceeds booster_time, increase effectiveness
+    effectiveness = np.where(t >= booster_time, effectiveness + booster_effect, effectiveness) 
+    
+    # Ensure effectiveness doesn't exceed 1 (100%)
+    return np.minimum(effectiveness, 1)
+
+
+def logistic_growth_with_vaccine(t, a, b, c, E0, decay_rate, booster_time, booster_effect):
+    """ Logistic growth with vaccination and booster doses """
+    vaccine_effect = vaccine_effectiveness(t, E0, decay_rate, booster_time, booster_effect)
+    
+    # Adjust the growth rate based on vaccine effectiveness
+    reduced_b = b * (1 - vaccine_effect)  # The vaccine reduces the growth rate
+    
+    return a / (1 + np.exp(-reduced_b * (t - c)))
+
+# Sample data (replace this with real-world data)
+days = np.arange(80, 200)
+actual_cases = np.log(days + 1) * 1000  # Example data, should be replaced with actual cases
+initial_cases = 1000  # Assume initial number of cases
+
+# Parameters for logistic growth without vaccine
+a = 50000  # Carrying capacity (maximum number of infected)
+b = 0.1  # Growth rate
+c = 50  # Inflection point (day at which growth is fastest)
+
+# Parameters for vaccine effectiveness
+E0 = 0.95  # Initial vaccine effectiveness (95%)
+decay_rate = 0.02 # Decay rate of immunity (2% per day)
+booster_time = 60  # Booster dose at day 60
+booster_effect =  0.1  # Booster increases vaccine effectiveness by 10%
+
+# Fit the logistic model without vaccine
+params, _ = curve_fit(logistic_growth, days, actual_cases, p0=[a, b, c])
+
+# Fit the logistic model with vaccine and boosters
+params_vaccine, _ = curve_fit(
+    logistic_growth_with_vaccine, 
+    days, 
+    actual_cases, 
+    p0=[a, b, c, E0, decay_rate, booster_time, booster_effect], 
+    maxfev=10000
+)
+
+# Plot the results
+plt.figure(figsize=(10, 6))
+plt.plot(days, actual_cases, label="Actual Cases(Without Vaccine)", color="blue")
+plt.plot(days, logistic_growth_with_vaccine(days, *params_vaccine), label="With Vaccine & Booster", linestyle="--", color="green")
+plt.title("Virus Spread with Vaccine Effectiveness, Waning Immunity, and Boosters")
+plt.xlabel("Days")
+plt.ylabel("Number of Infected Cases")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Mortality rate model (simple)
+def mortality_rate(infected_cases, mortality_rate=0.3):
+    """ Assumes a simple constant mortality rate (e.g., 2%) """
+    return infected_cases * mortality_rate
+
+# Calculate mortality with and without vaccine
+mortality_no_vaccine = mortality_rate(logistic_growth(days, *params))
+mortality_with_vaccine = mortality_rate(logistic_growth_with_vaccine(days, *params_vaccine))
+
+# Plot mortality comparisons
+plt.figure(figsize=(10, 6))
+plt.plot(days, mortality_no_vaccine, label="Mortality Without Vaccine", linestyle="--", color="red")
+plt.plot(days, mortality_with_vaccine, label="Mortality With Vaccine & Booster", linestyle="--", color="green")
+plt.title("Mortality Comparison With and Without Vaccine Effectiveness and Boosters")
+plt.xlabel("Days")
+plt.ylabel("Mortality Count")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Assuming 'Country/Region' is the correct column name for country data in the original DataFrame:
+fig = px.choropleth(data,  # Use the original 'data' DataFrame
+                    locations='Country/Region', 
+                    locationmode='country names',
+                    color='Deaths',  # Corrected column name
+                    hover_name='Country/Region',  # Changed hover_name to 'Country/Region'
+                    color_continuous_scale='Reds', 
+                    labels={'Deaths': 'Death'},
+                    title="Numbur of Deaths country wise")
+
+fig.update_geos(showcoastlines=True, coastlinecolor="Black", showland=True, landcolor="lightgray")
+fig.show()
